@@ -29,19 +29,31 @@
   #status{font-size:13px;color:#9a9aa8;padding:6px 12px;background:#0a0a0a;border-top:1px solid #1d1d1d;border-bottom:1px solid #1d1d1d;min-height:28px}
 
   /* الخلفية السوداء للترجمة */
-  #outBox{flex:1;background:#000;overflow-y:auto;padding:14px 14px 20px;-webkit-user-select:text;user-select:text}
-  #current{font-size:var(--fs);line-height:1.6;font-weight:800;color:#fff;min-height:1.75em;white-space:pre-wrap}
-  #current.empty{color:#555;font-weight:400;font-size:22px}
+  #outBox{flex:1;min-height:0;background:#000;overflow:hidden;padding:12px 14px;display:flex;flex-direction:column}
+  #fitArea{flex:1;min-height:0;display:flex;align-items:center;justify-content:center;overflow:hidden}
+  #current{width:100%;text-align:center;line-height:1.35;font-weight:900;color:#fff;white-space:pre-wrap;word-break:break-word}
+  #current.empty{color:#555;font-weight:400}
   #current.pop{animation:pop .35s ease}
   @keyframes pop{from{opacity:0;transform:translateY(8px)}to{opacity:1;transform:none}}
   #orig{direction:ltr;text-align:left;color:#7d7d8a;font-size:14px;margin-top:6px;line-height:1.5}
-  #history{margin-top:16px;border-top:1px solid #1f1f1f;padding-top:10px}
-  .h{color:#8c8c99;font-size:calc(var(--fs)*.55);line-height:1.6;padding:6px 0;border-bottom:1px dashed #1c1c1c}
+  #logPanel{position:fixed;inset:0;background:#000;z-index:50;display:flex;flex-direction:column;padding:calc(10px + env(safe-area-inset-top)) 12px calc(12px + env(safe-area-inset-bottom))}
+  #logPanel[hidden]{display:none}
+  #logHead{display:flex;align-items:center;justify-content:space-between;gap:8px;margin-bottom:10px}
+  #logHead h2{font-size:22px}
+  #logBtns{display:flex;gap:8px;margin-bottom:10px}
+  #logBtns button,#logClose{flex:1;border:1px solid #333;background:#1a1a22;color:#fff;border-radius:12px;padding:10px;font-size:15px;font-weight:700}
+  #logClose{flex:0 0 auto;padding:10px 16px}
+  #logList{flex:1;overflow-y:auto;-webkit-user-select:text;user-select:text}
+  .li{padding:12px 4px;border-bottom:1px solid #1d1d1d}
+  .li .ar{font-size:22px;font-weight:800;line-height:1.5}
+  .li .en{direction:ltr;text-align:left;color:#7d7d8a;font-size:14px;margin-top:4px}
+  .li .tm{color:#555;font-size:12px;margin-top:4px}
+  #logEmpty{color:#666;text-align:center;margin-top:40px;font-size:18px}
 
   /* الأزرار آخر شي تحت */
   #bottom{padding:8px 10px calc(10px + env(safe-area-inset-bottom));background:#0d0d12;border-top:1px solid #222}
   #tools{display:flex;gap:8px;margin-bottom:8px}
-  #tools button{flex:1;border:1px solid #333;background:#1a1a22;color:#fff;border-radius:12px;padding:10px 6px;font-size:15px;font-weight:700}
+  #tools button{flex:1;border:1px solid #333;background:#1a1a22;color:#fff;border-radius:12px;padding:10px 4px;font-size:14px;font-weight:700;white-space:nowrap}
   #startBtn{width:100%;border:0;border-radius:16px;padding:16px;font-size:22px;font-weight:800;color:#fff;
     background:linear-gradient(135deg,#00c853,#00a152);box-shadow:0 4px 18px rgba(0,200,83,.35);transition:.2s}
   #startBtn.on{background:linear-gradient(135deg,#ff3d3d,#c40000);box-shadow:0 4px 18px rgba(255,0,0,.35)}
@@ -73,9 +85,14 @@
   <div id="status">جاهز</div>
 
   <div id="outBox">
-    <div id="current" class="empty">الترجمة العربية بتطلع هنا…</div>
+    <div id="fitArea"><div id="current" class="empty">الترجمة العربية بتطلع هنا…</div></div>
     <div id="orig"></div>
-    <div id="history"></div>
+  </div>
+
+  <div id="logPanel" hidden>
+    <div id="logHead"><h2>📜 سجل الترجمات</h2><button id="logClose">✖ إغلاق</button></div>
+    <div id="logBtns"><button id="logCopy">📋 نسخ الكل</button><button id="logWipe">🗑️ مسح السجل</button></div>
+    <div id="logList"></div>
   </div>
 
   <div id="bottom">
@@ -107,13 +124,14 @@
           <option value="on">نص فاتح على خلفية غامقة</option>
           <option value="off">نص غامق على خلفية فاتحة</option>
         </select></div>
-      <div class="row"><span>حجم الخط</span><input type="range" id="fsize" min="22" max="72" value="40"></div>
+      <div class="row"><span>أكبر حجم للخط</span><input type="range" id="fmax" min="40" max="200" value="140"></div>
       <div class="row"><span>نطق الترجمة بالصوت</span><input type="checkbox" id="speak"></div>
       <div class="row"><span>عرض النص الأصلي</span><input type="checkbox" id="showOrig"></div>
     </div>
     <div id="tools">
       <button id="clearBtn">🧹 مسح</button>
-      <button id="resetBox">🔲 رجّع المربع</button>
+      <button id="logBtn">📜 السجل</button>
+      <button id="resetBox">🔲 المربع</button>
       <button id="setBtn">⚙️ الإعدادات</button>
     </div>
     <button id="startBtn">▶ ابدأ الترجمة</button>
@@ -128,7 +146,7 @@ const wctx = work.getContext('2d', { willReadFrequently: true });
 
 let stream = null, track = null, worker = null, workerLang = null;
 let running = false, timer = null, wakeLock = null;
-let lastText = '', historyList = [];
+let lastText = '';
 let shownThumb = null, candidate = null, stableCount = 0;
 const cache = new Map();
 
@@ -146,15 +164,15 @@ const DEFAULT_BOX = { x:.06, y:.55, w:.88, h:.3 };
 let region = load('gt_box', DEFAULT_BOX);
 
 /* ===== الإعدادات المحفوظة ===== */
-['lang','speed','inv','fsize','speak','showOrig'].forEach(id => {
+['lang','speed','inv','fmax','speak','showOrig'].forEach(id => {
   const el = $(id), v = load('gt_'+id, null);
   if (v !== null){ if (el.type === 'checkbox') el.checked = v; else el.value = v; }
   el.addEventListener('change', () => { save('gt_'+id, el.type === 'checkbox' ? el.checked : el.value); applySettings(); });
   el.addEventListener('input', applySettings);
 });
 function applySettings(){
-  document.documentElement.style.setProperty('--fs', $('fsize').value + 'px');
   $('orig').style.display = $('showOrig').checked ? 'block' : 'none';
+  if (typeof fitText === 'function') fitText();
 }
 applySettings();
 function setStatus(t){ $('status').textContent = t; }
@@ -362,10 +380,11 @@ ov.addEventListener('pointercancel', endPointer);
 document.addEventListener('gesturestart', e => e.preventDefault());
 
 $('resetBox').onclick = () => { region = { ...DEFAULT_BOX }; save('gt_box', region); resetStable(); draw(); };
-$('setBtn').onclick = () => { $('settings').hidden = !$('settings').hidden; };
+$('setBtn').onclick = () => { $('settings').hidden = !$('settings').hidden; setTimeout(fitText, 30); };
 $('clearBtn').onclick = () => {
-  historyList = []; resetStable(); $('history').innerHTML = ''; $('orig').textContent = '';
+  resetStable(); $('orig').textContent = '';
   $('current').className = 'empty'; $('current').textContent = 'الترجمة العربية بتطلع هنا…';
+  fitText();
 };
 
 /* ===== محرك قراءة النصوص ===== */
@@ -412,7 +431,16 @@ function capture(){
 }
 
 /* ===== تنظيف ومقارنة النص ===== */
-function clean(t){ return t.replace(/[|_~`^<>{}\[\]\\=*#@]/g, ' ').replace(/\s+/g, ' ').trim(); }
+function clean(t){
+  // نشيل الرموز الغريبة اللي تطلع بالغلط مثل ¥ $ © »
+  t = t.replace(/[^\p{L}\p{N}\s.,!?'’:;()\-]/gu, ' ');
+  return t.split(/\s+/).filter(w => {
+    const core = w.replace(/[^\p{L}\p{N}]/gu, '');
+    if (!core) return false;
+    if (core.length === 1 && !/^[aAIi0-9぀-ヿ一-鿿가-힯]$/.test(core)) return false;
+    return true;
+  }).join(' ').trim();
+}
 function meaningful(t){
   const letters = (t.match(/\p{L}/gu) || []).length;
   return letters >= 3 && letters / t.replace(/\s/g, '').length > .6;
@@ -476,18 +504,69 @@ async function translate(text){
 /* ===== العرض والصوت ===== */
 function show(ar, original){
   const cur = $('current');
-  if (!cur.classList.contains('empty') && cur.textContent.trim()){
-    historyList.unshift(cur.textContent);
-    historyList = historyList.slice(0, 6);
-    $('history').innerHTML = '';
-    historyList.forEach(t => { const el = document.createElement('div'); el.className = 'h'; el.textContent = t; $('history').appendChild(el); });
-  }
   cur.className = ''; void cur.offsetWidth; cur.className = 'pop';
   cur.textContent = ar;
   $('orig').textContent = original;
-  $('outBox').scrollTop = 0;
+  fitText();
+  addLog(ar, original);
   if ($('speak').checked) speak(ar);
 }
+
+/* ===== الخط يكبر لين يعبّي الخلفية السوداء ===== */
+function fitText(){
+  const area = $('fitArea'), cur = $('current');
+  const W = area.clientWidth, H = area.clientHeight;
+  if (!W || !H) return;
+  const max = cur.classList.contains('empty') ? 26 : +$('fmax').value;
+  let lo = 16, hi = max;
+  while (hi - lo > 1){
+    const mid = (lo + hi) >> 1;
+    cur.style.fontSize = mid + 'px';
+    if (cur.scrollHeight <= H && cur.scrollWidth <= W) lo = mid; else hi = mid;
+  }
+  cur.style.fontSize = lo + 'px';
+}
+window.addEventListener('resize', () => setTimeout(fitText, 200));
+
+/* ===== سجل كل الترجمات ===== */
+let logList = load('gt_log', []);
+function addLog(ar, original){
+  if (logList.length && logList[0].ar === ar) return;
+  logList.unshift({ ar, en:original, t:Date.now() });
+  if (logList.length > 1000) logList = logList.slice(0, 1000);
+  save('gt_log', logList);
+  if (!$('logPanel').hidden) renderLog();
+}
+function fmtTime(t){
+  const d = new Date(t);
+  let hh = d.getHours(), mm = d.getMinutes();
+  const pm = hh >= 12; hh = hh % 12 || 12;
+  return toAr(hh) + ':' + toAr(String(mm).padStart(2, '0')) + (pm ? ' م' : ' ص') + ' — ' + toAr(d.getDate()) + '/' + toAr(d.getMonth() + 1);
+}
+function renderLog(){
+  const box = $('logList'); box.innerHTML = '';
+  if (!logList.length){ const e = document.createElement('div'); e.id = 'logEmpty'; e.textContent = 'ما فيه ترجمات للحين'; box.appendChild(e); return; }
+  logList.forEach(it => {
+    const li = document.createElement('div'); li.className = 'li';
+    const a = document.createElement('div'); a.className = 'ar'; a.textContent = it.ar;
+    const e = document.createElement('div'); e.className = 'en'; e.textContent = it.en;
+    const m = document.createElement('div'); m.className = 'tm'; m.textContent = fmtTime(it.t);
+    li.append(a, e, m); box.appendChild(li);
+  });
+}
+$('logBtn').onclick = () => { renderLog(); $('logPanel').hidden = false; };
+$('logClose').onclick = () => { $('logPanel').hidden = true; };
+$('logCopy').onclick = async () => {
+  const txt = logList.slice().reverse().map(i => i.ar + '\n' + i.en).join('\n\n');
+  try{ await navigator.clipboard.writeText(txt); $('logCopy').textContent = '✅ تم النسخ'; }
+  catch(e){ $('logCopy').textContent = '⚠️ ما قدرت أنسخ'; }
+  setTimeout(() => $('logCopy').textContent = '📋 نسخ الكل', 1800);
+};
+let wipeArmed = false;
+$('logWipe').onclick = () => {
+  if (!wipeArmed){ wipeArmed = true; $('logWipe').textContent = '⚠️ اضغط مرة ثانية للتأكيد'; setTimeout(() => { wipeArmed = false; $('logWipe').textContent = '🗑️ مسح السجل'; }, 3000); return; }
+  wipeArmed = false; logList = []; save('gt_log', logList); renderLog(); $('logWipe').textContent = '🗑️ مسح السجل';
+};
 function speak(t){
   try{
     speechSynthesis.cancel();
@@ -568,6 +647,7 @@ $('startBtn').onclick = async () => {
 };
 
 $('lensBtn').style.display = 'none';
+setTimeout(fitText, 50);
 startCamera();
 </script>
 </body>
