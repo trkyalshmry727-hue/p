@@ -147,7 +147,7 @@ const wctx = work.getContext('2d', { willReadFrequently: true });
 let stream = null, track = null, worker = null, workerLang = null;
 let running = false, timer = null, wakeLock = null;
 let lastText = '';
-let shownThumb = null, candidate = null, stableCount = 0;
+let shownThumb = null, candidate = null, stableCount = 0, skipCount = 0;
 const cache = new Map();
 
 /* التقريب */
@@ -587,25 +587,31 @@ async function tick(){
     const c = capture();
     if (c){
       const thumb = makeThumb(c);
-      // إذا الصورة داخل المربع ما تغيرت عن آخر ترجمة، نخلي الترجمة مثل ما هي
-      if (shownThumb && thumbDiff(thumb, shownThumb) < 12){
+      skipCount++;
+      // إذا الصورة داخل المربع ما تغيرت عن آخر ترجمة، نخلي الترجمة مثل ما هي (ونتأكد كل شوي)
+      if (shownThumb && thumbDiff(thumb, shownThumb) < 6 && skipCount < 5){
         if (running) setStatus('🟢 الترجمة شغالة — أي نص يطلع بالمربع يتترجم');
       } else {
+        skipCount = 0;
+        setStatus('👀 أقرأ النص…');
         const { data } = await worker.recognize(c);
-        let text = (data.lines && data.lines.length)
-          ? data.lines.filter(l => l.confidence > 55).map(l => l.text).join(' ')
-          : (data.text || '');
+        const lines = (data.lines || []).filter(l => clean(l.text));
+        let good = lines.filter(l => l.confidence > 30);
+        let text = good.length ? good.map(l => l.text).join(' ') : (data.text || '');
         text = clean(text);
-        if (!meaningful(text) || (data.confidence != null && data.confidence < 45)){
+        const conf = good.length ? good.reduce((a, l) => a + l.confidence, 0) / good.length : (data.confidence || 0);
+        if (!meaningful(text)){
           candidate = null; stableCount = 0;
+          if (running) setStatus('🟡 ما لقيت نص واضح داخل المربع — قرّب الكاميرا أو كبّر المربع على الكلام');
         } else if (lastText && sameText(text, lastText) > .6 && text.length < lastText.length * 1.3){
           // نفس الكلام بس القراءة اختلفت شوي — ما نغير شي
           shownThumb = thumb; candidate = null; stableCount = 0;
+          if (running) setStatus('🟢 الترجمة شغالة — أي نص يطلع بالمربع يتترجم');
         } else {
-          // لازم الكلام الجديد يتكرر مرتين ورا بعض عشان نتأكد إنه ثابت
-          if (candidate && sameText(text, candidate) > .75){ stableCount++; if (text.length > candidate.length) candidate = text; }
+          // إذا القراءة واضحة نترجم على طول، وإذا مو واضحة ننتظر قراءة ثانية تأكدها
+          if (candidate && sameText(text, candidate) > .5){ stableCount++; if (text.length > candidate.length) candidate = text; }
           else { candidate = text; stableCount = 1; }
-          if (stableCount >= 2){
+          if (stableCount >= 2 || conf >= 65 || !lastText){
             const finalText = candidate;
             candidate = null; stableCount = 0;
             setStatus('🔄 جاري الترجمة…');
@@ -615,8 +621,8 @@ async function tick(){
               if (ar.trim() !== $('current').textContent.trim()) show(ar, finalText);
             }
           }
+          if (running) setStatus('🟢 الترجمة شغالة — أي نص يطلع بالمربع يتترجم');
         }
-        if (running) setStatus('🟢 الترجمة شغالة — أي نص يطلع بالمربع يتترجم');
       }
     }
   }catch(e){
