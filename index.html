@@ -1,0 +1,398 @@
+<!DOCTYPE html>
+<html lang="ar" dir="rtl">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width,initial-scale=1,maximum-scale=1,user-scalable=no,viewport-fit=cover">
+<meta name="theme-color" content="#000000">
+<meta name="apple-mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-status-bar-style" content="black">
+<title>مترجم الألعاب</title>
+<script src="https://cdn.jsdelivr.net/npm/tesseract.js@5.1.1/dist/tesseract.min.js"></script>
+<style>
+  *{box-sizing:border-box;margin:0;padding:0;-webkit-tap-highlight-color:transparent}
+  :root{--fs:26px}
+  html,body{height:100%;background:#000;color:#fff;font-family:-apple-system,"SF Arabic","Segoe UI",Tahoma,sans-serif;overflow:hidden}
+  #app{display:flex;flex-direction:column;height:100dvh;padding:env(safe-area-inset-top) 0 env(safe-area-inset-bottom)}
+  #top{padding:10px 10px 8px;background:#0d0d12;border-bottom:1px solid #222}
+  #startBtn{width:100%;border:0;border-radius:16px;padding:16px;font-size:22px;font-weight:800;color:#fff;
+    background:linear-gradient(135deg,#00c853,#00a152);box-shadow:0 4px 18px rgba(0,200,83,.35);transition:.2s}
+  #startBtn.on{background:linear-gradient(135deg,#ff3d3d,#c40000);box-shadow:0 4px 18px rgba(255,0,0,.35)}
+  #startBtn:active{transform:scale(.98)}
+  #tools{display:flex;gap:8px;margin-top:8px}
+  #tools button{flex:1;border:1px solid #333;background:#1a1a22;color:#fff;border-radius:12px;padding:10px 6px;font-size:15px;font-weight:700}
+  #tools button.active{background:#ffd400;color:#000;border-color:#ffd400}
+  #settings{margin-top:8px;background:#15151c;border:1px solid #2a2a35;border-radius:12px;padding:10px;display:grid;gap:9px;font-size:15px}
+  #settings[hidden]{display:none}
+  .row{display:flex;align-items:center;justify-content:space-between;gap:10px}
+  .row select,.row input[type=range]{flex:1;max-width:60%}
+  select{background:#000;color:#fff;border:1px solid #444;border-radius:8px;padding:7px;font-size:15px}
+  input[type=checkbox]{width:22px;height:22px;accent-color:#00c853}
+  #camBox{position:relative;flex:0 0 40dvh;background:#000;overflow:hidden}
+  #video{position:absolute;inset:0;width:100%;height:100%;object-fit:contain;background:#000}
+  #overlay{position:absolute;inset:0;width:100%;height:100%;touch-action:none}
+  #camMsg{position:absolute;inset:0;display:flex;align-items:center;justify-content:center;text-align:center;padding:20px;
+    font-size:18px;color:#bbb;background:#050505}
+  #hint{position:absolute;top:8px;right:8px;left:8px;text-align:center;background:rgba(255,212,0,.95);color:#000;
+    font-weight:800;border-radius:10px;padding:8px;font-size:15px;display:none;pointer-events:none}
+  #status{font-size:13px;color:#9a9aa8;padding:6px 12px;background:#0a0a0a;border-top:1px solid #1d1d1d;border-bottom:1px solid #1d1d1d;min-height:28px}
+  #outBox{flex:1;background:#000;overflow-y:auto;padding:14px 14px 30px}
+  #current{font-size:var(--fs);line-height:1.75;font-weight:700;color:#fff;min-height:1.75em;white-space:pre-wrap}
+  #current.empty{color:#555;font-weight:400;font-size:18px}
+  #current.pop{animation:pop .35s ease}
+  @keyframes pop{from{opacity:0;transform:translateY(8px)}to{opacity:1;transform:none}}
+  #orig{direction:ltr;text-align:left;color:#7d7d8a;font-size:14px;margin-top:6px;line-height:1.5}
+  #history{margin-top:16px;border-top:1px solid #1f1f1f;padding-top:10px}
+  .h{color:#8c8c99;font-size:calc(var(--fs)*.62);line-height:1.6;padding:6px 0;border-bottom:1px dashed #1c1c1c}
+</style>
+</head>
+<body>
+<div id="app">
+  <div id="top">
+    <button id="startBtn">▶ ابدأ الترجمة</button>
+    <div id="tools">
+      <button id="selBtn">✏️ حدد مكان النص</button>
+      <button id="clearBtn">🧹 مسح</button>
+      <button id="setBtn">⚙️ الإعدادات</button>
+    </div>
+    <div id="settings" hidden>
+      <div class="row"><span>لغة اللعبة</span>
+        <select id="lang">
+          <option value="eng">الإنجليزية</option>
+          <option value="jpn">اليابانية</option>
+          <option value="chi_sim">الصينية</option>
+          <option value="kor">الكورية</option>
+          <option value="fra">الفرنسية</option>
+          <option value="spa">الإسبانية</option>
+          <option value="deu">الألمانية</option>
+          <option value="rus">الروسية</option>
+          <option value="por">البرتغالية</option>
+          <option value="ita">الإيطالية</option>
+          <option value="tur">التركية</option>
+        </select></div>
+      <div class="row"><span>سرعة الالتقاط</span>
+        <select id="speed">
+          <option value="600">سريع جداً</option>
+          <option value="1200" selected>سريع</option>
+          <option value="2000">متوسط</option>
+          <option value="3500">بطيء</option>
+        </select></div>
+      <div class="row"><span>ألوان النص</span>
+        <select id="inv">
+          <option value="auto">تلقائي</option>
+          <option value="on">نص فاتح على خلفية غامقة</option>
+          <option value="off">نص غامق على خلفية فاتحة</option>
+        </select></div>
+      <div class="row"><span>حجم الخط</span><input type="range" id="fs" min="16" max="48" value="26"></div>
+      <div class="row" id="zoomRow" style="display:none"><span>تقريب الكاميرا</span><input type="range" id="zoom" min="1" max="5" step="0.1" value="1"></div>
+      <div class="row"><span>نطق الترجمة بالصوت</span><input type="checkbox" id="speak"></div>
+      <div class="row"><span>عرض النص الأصلي</span><input type="checkbox" id="showOrig"></div>
+    </div>
+  </div>
+
+  <div id="camBox">
+    <video id="video" playsinline muted autoplay></video>
+    <canvas id="overlay"></canvas>
+    <div id="hint">اسحب بإصبعك على مكان النص في الشاشة</div>
+    <div id="camMsg">اضغط هنا لتشغيل الكاميرا</div>
+  </div>
+
+  <div id="status">جاهز</div>
+
+  <div id="outBox">
+    <div id="current" class="empty">الترجمة العربية بتطلع هنا…</div>
+    <div id="orig"></div>
+    <div id="history"></div>
+  </div>
+</div>
+
+<script>
+const $ = id => document.getElementById(id);
+const video = $('video'), ov = $('overlay'), octx = ov.getContext('2d');
+const work = document.createElement('canvas');
+const wctx = work.getContext('2d', { willReadFrequently: true });
+
+let stream = null, track = null, worker = null, workerLang = null;
+let running = false, selecting = false, timer = null, wakeLock = null;
+let lastText = '', historyList = [], tempRect = null, dragStart = null;
+const cache = new Map();
+
+function load(k, d){ try{ const v = localStorage.getItem(k); return v ? JSON.parse(v) : d; }catch(e){ return d; } }
+function save(k, v){ try{ localStorage.setItem(k, JSON.stringify(v)); }catch(e){} }
+
+let region = load('gt_region', { x:.05, y:.62, w:.9, h:.3 });
+
+/* ===== الإعدادات المحفوظة ===== */
+const settingsIds = ['lang','speed','inv','fs','speak','showOrig'];
+settingsIds.forEach(id => {
+  const el = $(id), v = load('gt_'+id, null);
+  if (v !== null){ if (el.type === 'checkbox') el.checked = v; else el.value = v; }
+  el.addEventListener('change', () => { save('gt_'+id, el.type === 'checkbox' ? el.checked : el.value); applySettings(); });
+  el.addEventListener('input', applySettings);
+});
+function applySettings(){
+  document.documentElement.style.setProperty('--fs', $('fs').value + 'px');
+  $('orig').style.display = $('showOrig').checked ? 'block' : 'none';
+}
+applySettings();
+
+function setStatus(t){ $('status').textContent = t; }
+
+/* ===== الكاميرا ===== */
+async function startCamera(){
+  if (stream) return true;
+  try{
+    stream = await navigator.mediaDevices.getUserMedia({
+      video:{ facingMode:{ ideal:'environment' }, width:{ ideal:1920 }, height:{ ideal:1080 } }, audio:false
+    });
+    video.srcObject = stream;
+    await video.play();
+    track = stream.getVideoTracks()[0];
+    $('camMsg').style.display = 'none';
+    try{
+      const c = track.getCapabilities ? track.getCapabilities() : {};
+      if (c.focusMode && c.focusMode.includes('continuous')) track.applyConstraints({ advanced:[{ focusMode:'continuous' }] });
+      if (c.zoom){
+        const z = $('zoom'); z.min = c.zoom.min; z.max = Math.min(c.zoom.max, 10); z.step = c.zoom.step || .1;
+        z.value = c.zoom.min; $('zoomRow').style.display = 'flex';
+        z.oninput = () => track.applyConstraints({ advanced:[{ zoom: +z.value }] }).catch(()=>{});
+      }
+    }catch(e){}
+    setTimeout(resizeOverlay, 100);
+    setStatus('الكاميرا شغالة — حدد مكان النص ثم اضغط ابدأ الترجمة');
+    return true;
+  }catch(e){
+    stream = null;
+    $('camMsg').textContent = 'ما قدرت أشغل الكاميرا. اضغط هنا واسمح باستخدام الكاميرا';
+    $('camMsg').style.display = 'flex';
+    setStatus('الكاميرا مو شغالة');
+    return false;
+  }
+}
+$('camMsg').onclick = startCamera;
+video.addEventListener('loadedmetadata', resizeOverlay);
+window.addEventListener('resize', () => setTimeout(resizeOverlay, 150));
+
+/* ===== تحديد مكان النص ===== */
+function vidRect(){
+  const cw = ov.clientWidth, ch = ov.clientHeight;
+  const vw = video.videoWidth || 16, vh = video.videoHeight || 9;
+  const s = Math.min(cw / vw, ch / vh), w = vw * s, h = vh * s;
+  return { x:(cw - w) / 2, y:(ch - h) / 2, w, h };
+}
+function resizeOverlay(){
+  const dpr = window.devicePixelRatio || 1;
+  ov.width = ov.clientWidth * dpr; ov.height = ov.clientHeight * dpr;
+  octx.setTransform(dpr, 0, 0, dpr, 0, 0);
+  draw();
+}
+function draw(){
+  const W = ov.clientWidth, H = ov.clientHeight, r = vidRect(), g = tempRect || region;
+  octx.clearRect(0, 0, W, H);
+  if (!stream) return;
+  const x = r.x + g.x * r.w, y = r.y + g.y * r.h, w = g.w * r.w, h = g.h * r.h;
+  octx.fillStyle = 'rgba(0,0,0,.5)'; octx.fillRect(0, 0, W, H); octx.clearRect(x, y, w, h);
+  octx.lineWidth = 3; octx.setLineDash(selecting ? [10, 6] : []);
+  octx.strokeStyle = running ? '#00e676' : '#ffd400'; octx.strokeRect(x, y, w, h);
+  octx.setLineDash([]); octx.fillStyle = octx.strokeStyle;
+  const L = 16; [[x,y,1,1],[x+w,y,-1,1],[x,y+h,1,-1],[x+w,y+h,-1,-1]].forEach(([cx,cy,dx,dy])=>{
+    octx.fillRect(cx - (dx<0?5:0), cy - (dy<0?5:0), L*dx, 5*dy); octx.fillRect(cx - (dx<0?5:0), cy - (dy<0?5:0), 5*dx, L*dy);
+  });
+}
+function toNorm(e){
+  const b = ov.getBoundingClientRect(), r = vidRect();
+  const cl = v => Math.max(0, Math.min(1, v));
+  return { x: cl((e.clientX - b.left - r.x) / r.w), y: cl((e.clientY - b.top - r.y) / r.h) };
+}
+ov.addEventListener('pointerdown', e => {
+  if (!selecting) return;
+  ov.setPointerCapture(e.pointerId); dragStart = toNorm(e); tempRect = { x:dragStart.x, y:dragStart.y, w:0, h:0 };
+});
+ov.addEventListener('pointermove', e => {
+  if (!selecting || !dragStart) return;
+  const p = toNorm(e);
+  tempRect = { x:Math.min(p.x, dragStart.x), y:Math.min(p.y, dragStart.y), w:Math.abs(p.x - dragStart.x), h:Math.abs(p.y - dragStart.y) };
+  draw();
+});
+ov.addEventListener('pointerup', () => {
+  if (!selecting || !dragStart) return;
+  if (tempRect && tempRect.w > .04 && tempRect.h > .03){
+    region = tempRect; save('gt_region', region); lastText = '';
+    setSelecting(false); setStatus('تم تحديد مكان النص ✅');
+  }
+  tempRect = null; dragStart = null; draw();
+});
+function setSelecting(v){
+  selecting = v;
+  $('selBtn').classList.toggle('active', v);
+  $('selBtn').textContent = v ? '✅ تم' : '✏️ حدد مكان النص';
+  $('hint').style.display = v ? 'block' : 'none';
+  draw();
+}
+$('selBtn').onclick = async () => { if (!(await startCamera())) return; setSelecting(!selecting); };
+$('setBtn').onclick = () => { $('settings').hidden = !$('settings').hidden; setTimeout(resizeOverlay, 50); };
+$('clearBtn').onclick = () => {
+  historyList = []; lastText = ''; $('history').innerHTML = ''; $('orig').textContent = '';
+  $('current').className = 'empty'; $('current').textContent = 'الترجمة العربية بتطلع هنا…';
+};
+
+/* ===== محرك قراءة النصوص ===== */
+async function ensureWorker(){
+  const lang = $('lang').value;
+  if (worker && workerLang === lang) return;
+  if (worker){ try{ await worker.terminate(); }catch(e){} worker = null; }
+  setStatus('جاري تحميل محرك قراءة النصوص… (أول مرة ياخذ شوي)');
+  worker = await Tesseract.createWorker(lang, 1, {
+    logger: m => { if (m.progress != null && /load|init/i.test(m.status || '')) setStatus('جاري التحميل ' + Math.round(m.progress * 100) + '٪'); }
+  });
+  await worker.setParameters({ tessedit_pageseg_mode: '6', preserve_interword_spaces: '1' });
+  workerLang = lang;
+}
+
+/* ===== تجهيز الصورة ===== */
+function capture(){
+  const vw = video.videoWidth, vh = video.videoHeight;
+  if (!vw || !vh) return null;
+  const sx = region.x * vw, sy = region.y * vh, sw = Math.max(8, region.w * vw), sh = Math.max(8, region.h * vh);
+  const scale = Math.max(1, Math.min(3, 1400 / sw));
+  work.width = Math.round(sw * scale); work.height = Math.round(sh * scale);
+  wctx.imageSmoothingQuality = 'high';
+  wctx.drawImage(video, sx, sy, sw, sh, 0, 0, work.width, work.height);
+  const img = wctx.getImageData(0, 0, work.width, work.height), d = img.data, n = d.length / 4;
+  const g = new Uint8ClampedArray(n), hist = new Uint32Array(256); let sum = 0;
+  for (let i = 0, j = 0; i < n; i++, j += 4){ const v = (d[j]*.299 + d[j+1]*.587 + d[j+2]*.114) | 0; g[i] = v; hist[v]++; sum += v; }
+  let lo = 0, hi = 255, acc = 0;
+  for (let i = 0; i < 256; i++){ acc += hist[i]; if (acc > n * .02){ lo = i; break; } }
+  acc = 0; for (let i = 255; i >= 0; i--){ acc += hist[i]; if (acc > n * .02){ hi = i; break; } }
+  const range = Math.max(30, hi - lo), mode = $('inv').value;
+  const invert = mode === 'on' || (mode === 'auto' && sum / n < 115);
+  for (let i = 0, j = 0; i < n; i++, j += 4){
+    let v = (g[i] - lo) * 255 / range; v = v < 0 ? 0 : v > 255 ? 255 : v;
+    if (invert) v = 255 - v;
+    d[j] = d[j+1] = d[j+2] = v; d[j+3] = 255;
+  }
+  wctx.putImageData(img, 0, 0);
+  return work;
+}
+
+/* ===== تنظيف ومقارنة النص ===== */
+function clean(t){
+  return t.replace(/[|_~`^<>{}\[\]\\=*#@]/g, ' ').replace(/\s+/g, ' ').trim();
+}
+function meaningful(t){
+  const letters = (t.match(/\p{L}/gu) || []).length;
+  return letters >= 3 && letters / t.replace(/\s/g, '').length > .6;
+}
+function norm(s){ return s.toLowerCase().replace(/[^\p{L}\p{N}]/gu, ''); }
+function similarity(a, b){
+  a = norm(a); b = norm(b);
+  if (!a || !b) return 0; if (a === b) return 1;
+  if (a.length > 400 || b.length > 400){ a = a.slice(0, 400); b = b.slice(0, 400); }
+  let prev = Array.from({ length: b.length + 1 }, (_, i) => i);
+  for (let i = 1; i <= a.length; i++){
+    const cur = [i];
+    for (let j = 1; j <= b.length; j++) cur[j] = Math.min(prev[j] + 1, cur[j-1] + 1, prev[j-1] + (a[i-1] === b[j-1] ? 0 : 1));
+    prev = cur;
+  }
+  return 1 - prev[b.length] / Math.max(a.length, b.length);
+}
+
+/* ===== الترجمة (مجانية) ===== */
+const srcMap = { eng:'en', jpn:'ja', chi_sim:'zh-CN', kor:'ko', fra:'fr', spa:'es', deu:'de', rus:'ru', por:'pt', ita:'it', tur:'tr' };
+async function translate(text){
+  if (cache.has(text)) return cache.get(text);
+  let out = '';
+  try{
+    const r = await fetch('https://translate.googleapis.com/translate_a/single?client=gtx&sl=auto&tl=ar&dt=t&q=' + encodeURIComponent(text));
+    const j = await r.json();
+    out = j[0].map(x => x[0]).join('');
+  }catch(e){
+    const src = srcMap[$('lang').value] || 'en';
+    const r = await fetch('https://api.mymemory.translated.net/get?q=' + encodeURIComponent(text.slice(0, 480)) + '&langpair=' + src + '|ar');
+    const j = await r.json();
+    out = j.responseData && j.responseData.translatedText || '';
+  }
+  if (out) cache.set(text, out);
+  return out;
+}
+
+/* ===== العرض والصوت ===== */
+function show(ar, original){
+  const cur = $('current');
+  if (!cur.classList.contains('empty') && cur.textContent.trim()){
+    historyList.unshift(cur.textContent);
+    historyList = historyList.slice(0, 6);
+    $('history').innerHTML = historyList.map(t => '<div class="h"></div>').join('');
+    [...$('history').children].forEach((el, i) => el.textContent = historyList[i]);
+  }
+  cur.className = ''; void cur.offsetWidth; cur.className = 'pop';
+  cur.textContent = ar;
+  $('orig').textContent = original;
+  $('outBox').scrollTop = 0;
+  if ($('speak').checked) speak(ar);
+}
+function speak(t){
+  try{
+    speechSynthesis.cancel();
+    const u = new SpeechSynthesisUtterance(t);
+    u.lang = 'ar-SA'; u.rate = 1.05;
+    const v = speechSynthesis.getVoices().find(v => /^ar/i.test(v.lang));
+    if (v) u.voice = v;
+    speechSynthesis.speak(u);
+  }catch(e){}
+}
+
+/* ===== حلقة الترجمة ===== */
+async function tick(){
+  if (!running) return;
+  try{
+    await ensureWorker();
+    if (!running) return;
+    const c = capture();
+    if (c){
+      const { data } = await worker.recognize(c);
+      let text = '';
+      if (data.lines && data.lines.length){
+        text = data.lines.filter(l => l.confidence > 45).map(l => l.text).join(' ');
+      } else text = data.text || '';
+      text = clean(text);
+      if (meaningful(text) && similarity(text, lastText) < .8){
+        lastText = text;
+        setStatus('🔄 جاري الترجمة…');
+        const ar = await translate(text);
+        if (ar && running) show(ar, text);
+      }
+      if (running) setStatus('🟢 الترجمة شغالة — أي نص يطلع بالمربع يتترجم');
+    }
+  }catch(e){
+    setStatus('⚠️ صارت مشكلة، تأكد من الإنترنت… أحاول مرة ثانية');
+  }
+  if (running) timer = setTimeout(tick, +$('speed').value);
+}
+
+async function keepAwake(on){
+  try{
+    if (on && 'wakeLock' in navigator) wakeLock = await navigator.wakeLock.request('screen');
+    else if (!on && wakeLock){ wakeLock.release(); wakeLock = null; }
+  }catch(e){}
+}
+document.addEventListener('visibilitychange', () => { if (running && document.visibilityState === 'visible') keepAwake(true); });
+
+$('startBtn').onclick = async () => {
+  if (running){
+    running = false; clearTimeout(timer); keepAwake(false);
+    $('startBtn').classList.remove('on'); $('startBtn').textContent = '▶ ابدأ الترجمة';
+    setStatus('تم إيقاف الترجمة'); draw(); return;
+  }
+  if (!(await startCamera())) return;
+  if (selecting) setSelecting(false);
+  if (typeof Tesseract === 'undefined'){ setStatus('⚠️ ما تحمل محرك القراءة، تأكد من الإنترنت وحدّث الصفحة'); return; }
+  running = true; lastText = '';
+  $('startBtn').classList.add('on'); $('startBtn').textContent = '⏹ إيقاف الترجمة';
+  keepAwake(true); draw(); tick();
+};
+
+if (window.speechSynthesis) speechSynthesis.onvoiceschanged = () => {};
+startCamera();
+</script>
+</body>
+</html>
