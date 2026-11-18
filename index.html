@@ -10,7 +10,7 @@
 <script src="https://cdn.jsdelivr.net/npm/tesseract.js@5.1.1/dist/tesseract.min.js"></script>
 <style>
   *{box-sizing:border-box;margin:0;padding:0;-webkit-tap-highlight-color:transparent;-webkit-user-select:none;user-select:none}
-  :root{--fs:26px}
+  :root{--fs:40px}
   html,body{height:100%;background:#000;color:#fff;font-family:-apple-system,"SF Arabic","Segoe UI",Tahoma,sans-serif;overflow:hidden;overscroll-behavior:none}
   #app{display:flex;flex-direction:column;height:100dvh;padding-top:env(safe-area-inset-top)}
 
@@ -30,13 +30,13 @@
 
   /* الخلفية السوداء للترجمة */
   #outBox{flex:1;background:#000;overflow-y:auto;padding:14px 14px 20px;-webkit-user-select:text;user-select:text}
-  #current{font-size:var(--fs);line-height:1.75;font-weight:700;color:#fff;min-height:1.75em;white-space:pre-wrap}
-  #current.empty{color:#555;font-weight:400;font-size:18px}
+  #current{font-size:var(--fs);line-height:1.6;font-weight:800;color:#fff;min-height:1.75em;white-space:pre-wrap}
+  #current.empty{color:#555;font-weight:400;font-size:22px}
   #current.pop{animation:pop .35s ease}
   @keyframes pop{from{opacity:0;transform:translateY(8px)}to{opacity:1;transform:none}}
   #orig{direction:ltr;text-align:left;color:#7d7d8a;font-size:14px;margin-top:6px;line-height:1.5}
   #history{margin-top:16px;border-top:1px solid #1f1f1f;padding-top:10px}
-  .h{color:#8c8c99;font-size:calc(var(--fs)*.62);line-height:1.6;padding:6px 0;border-bottom:1px dashed #1c1c1c}
+  .h{color:#8c8c99;font-size:calc(var(--fs)*.55);line-height:1.6;padding:6px 0;border-bottom:1px dashed #1c1c1c}
 
   /* الأزرار آخر شي تحت */
   #bottom{padding:8px 10px calc(10px + env(safe-area-inset-bottom));background:#0d0d12;border-top:1px solid #222}
@@ -107,7 +107,7 @@
           <option value="on">نص فاتح على خلفية غامقة</option>
           <option value="off">نص غامق على خلفية فاتحة</option>
         </select></div>
-      <div class="row"><span>حجم الخط</span><input type="range" id="fs" min="16" max="48" value="26"></div>
+      <div class="row"><span>حجم الخط</span><input type="range" id="fsize" min="22" max="72" value="40"></div>
       <div class="row"><span>نطق الترجمة بالصوت</span><input type="checkbox" id="speak"></div>
       <div class="row"><span>عرض النص الأصلي</span><input type="checkbox" id="showOrig"></div>
     </div>
@@ -129,6 +129,7 @@ const wctx = work.getContext('2d', { willReadFrequently: true });
 let stream = null, track = null, worker = null, workerLang = null;
 let running = false, timer = null, wakeLock = null;
 let lastText = '', historyList = [];
+let shownThumb = null, candidate = null, stableCount = 0;
 const cache = new Map();
 
 /* التقريب */
@@ -145,14 +146,14 @@ const DEFAULT_BOX = { x:.06, y:.55, w:.88, h:.3 };
 let region = load('gt_box', DEFAULT_BOX);
 
 /* ===== الإعدادات المحفوظة ===== */
-['lang','speed','inv','fs','speak','showOrig'].forEach(id => {
+['lang','speed','inv','fsize','speak','showOrig'].forEach(id => {
   const el = $(id), v = load('gt_'+id, null);
   if (v !== null){ if (el.type === 'checkbox') el.checked = v; else el.value = v; }
   el.addEventListener('change', () => { save('gt_'+id, el.type === 'checkbox' ? el.checked : el.value); applySettings(); });
   el.addEventListener('input', applySettings);
 });
 function applySettings(){
-  document.documentElement.style.setProperty('--fs', $('fs').value + 'px');
+  document.documentElement.style.setProperty('--fs', $('fsize').value + 'px');
   $('orig').style.display = $('showOrig').checked ? 'block' : 'none';
 }
 applySettings();
@@ -229,7 +230,7 @@ $('lensBtn').onclick = async () => {
     $('lensTag').textContent = lensName(d.label, lensIndex);
     $('lensTag').style.display = 'block';
     clearTimeout(lensTagTimer); lensTagTimer = setTimeout(() => $('lensTag').style.display = 'none', 2500);
-    lastText = '';
+    resetStable();
     setTimeout(resizeOverlay, 100);
   }catch(e){ setStatus('ما قدرت أغيّر العدسة'); }
 };
@@ -354,16 +355,16 @@ ov.addEventListener('pointermove', e => {
 function endPointer(e){
   pointers.delete(e.pointerId);
   if (pointers.size < 2) pinch = null;
-  if (pointers.size === 0 && action){ action = null; save('gt_box', region); lastText = ''; }
+  if (pointers.size === 0 && action){ action = null; save('gt_box', region); resetStable(); }
 }
 ov.addEventListener('pointerup', endPointer);
 ov.addEventListener('pointercancel', endPointer);
 document.addEventListener('gesturestart', e => e.preventDefault());
 
-$('resetBox').onclick = () => { region = { ...DEFAULT_BOX }; save('gt_box', region); lastText = ''; draw(); };
+$('resetBox').onclick = () => { region = { ...DEFAULT_BOX }; save('gt_box', region); resetStable(); draw(); };
 $('setBtn').onclick = () => { $('settings').hidden = !$('settings').hidden; };
 $('clearBtn').onclick = () => {
-  historyList = []; lastText = ''; $('history').innerHTML = ''; $('orig').textContent = '';
+  historyList = []; resetStable(); $('history').innerHTML = ''; $('orig').textContent = '';
   $('current').className = 'empty'; $('current').textContent = 'الترجمة العربية بتطلع هنا…';
 };
 
@@ -429,6 +430,30 @@ function similarity(a, b){
   return 1 - prev[b.length] / Math.max(a.length, b.length);
 }
 
+/* ===== ثبات الكلام: ما يتغير إلا إذا تغير النص فعلاً ===== */
+const thumbC = document.createElement('canvas'); thumbC.width = 64; thumbC.height = 20;
+const thumbX = thumbC.getContext('2d', { willReadFrequently: true });
+function makeThumb(src){
+  thumbX.drawImage(src, 0, 0, 64, 20);
+  const d = thumbX.getImageData(0, 0, 64, 20).data, out = new Uint8Array(64 * 20);
+  for (let i = 0, j = 0; i < out.length; i++, j += 4) out[i] = d[j];
+  return out;
+}
+function thumbDiff(a, b){
+  if (!a || !b) return 255;
+  let s = 0; for (let i = 0; i < a.length; i++) s += Math.abs(a[i] - b[i]);
+  return s / a.length;
+}
+function words(t){ return new Set((t.toLowerCase().match(/[\p{L}\p{N}]{2,}/gu) || [])); }
+function wordSim(a, b){
+  const A = words(a), B = words(b);
+  if (!A.size || !B.size) return 0;
+  let inter = 0; A.forEach(w => { if (B.has(w)) inter++; });
+  return 2 * inter / (A.size + B.size);
+}
+function sameText(a, b){ return Math.max(wordSim(a, b), similarity(a, b)); }
+function resetStable(){ lastText = ''; shownThumb = null; candidate = null; stableCount = 0; }
+
 /* ===== الترجمة (مجانية) ===== */
 const srcMap = { eng:'en', jpn:'ja', chi_sim:'zh-CN', kor:'ko', fra:'fr', spa:'es', deu:'de', rus:'ru', por:'pt', ita:'it', tur:'tr' };
 async function translate(text){
@@ -482,18 +507,38 @@ async function tick(){
     if (!running) return;
     const c = capture();
     if (c){
-      const { data } = await worker.recognize(c);
-      let text = (data.lines && data.lines.length)
-        ? data.lines.filter(l => l.confidence > 45).map(l => l.text).join(' ')
-        : (data.text || '');
-      text = clean(text);
-      if (meaningful(text) && similarity(text, lastText) < .8){
-        lastText = text;
-        setStatus('🔄 جاري الترجمة…');
-        const ar = await translate(text);
-        if (ar && running) show(ar, text);
+      const thumb = makeThumb(c);
+      // إذا الصورة داخل المربع ما تغيرت عن آخر ترجمة، نخلي الترجمة مثل ما هي
+      if (shownThumb && thumbDiff(thumb, shownThumb) < 12){
+        if (running) setStatus('🟢 الترجمة شغالة — أي نص يطلع بالمربع يتترجم');
+      } else {
+        const { data } = await worker.recognize(c);
+        let text = (data.lines && data.lines.length)
+          ? data.lines.filter(l => l.confidence > 55).map(l => l.text).join(' ')
+          : (data.text || '');
+        text = clean(text);
+        if (!meaningful(text) || (data.confidence != null && data.confidence < 45)){
+          candidate = null; stableCount = 0;
+        } else if (lastText && sameText(text, lastText) > .6 && text.length < lastText.length * 1.3){
+          // نفس الكلام بس القراءة اختلفت شوي — ما نغير شي
+          shownThumb = thumb; candidate = null; stableCount = 0;
+        } else {
+          // لازم الكلام الجديد يتكرر مرتين ورا بعض عشان نتأكد إنه ثابت
+          if (candidate && sameText(text, candidate) > .75){ stableCount++; if (text.length > candidate.length) candidate = text; }
+          else { candidate = text; stableCount = 1; }
+          if (stableCount >= 2){
+            const finalText = candidate;
+            candidate = null; stableCount = 0;
+            setStatus('🔄 جاري الترجمة…');
+            const ar = await translate(finalText);
+            if (ar && running){
+              lastText = finalText; shownThumb = thumb;
+              if (ar.trim() !== $('current').textContent.trim()) show(ar, finalText);
+            }
+          }
+        }
+        if (running) setStatus('🟢 الترجمة شغالة — أي نص يطلع بالمربع يتترجم');
       }
-      if (running) setStatus('🟢 الترجمة شغالة — أي نص يطلع بالمربع يتترجم');
     }
   }catch(e){
     setStatus('⚠️ صارت مشكلة، تأكد من الإنترنت… أحاول مرة ثانية');
@@ -517,7 +562,7 @@ $('startBtn').onclick = async () => {
   }
   if (!(await startCamera())) return;
   if (typeof Tesseract === 'undefined'){ setStatus('⚠️ ما تحمل محرك القراءة، تأكد من الإنترنت وحدّث الصفحة'); return; }
-  running = true; lastText = '';
+  running = true; resetStable();
   $('startBtn').classList.add('on'); $('startBtn').textContent = '⏹ إيقاف الترجمة';
   keepAwake(true); draw(); tick();
 };
