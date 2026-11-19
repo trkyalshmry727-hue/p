@@ -113,16 +113,17 @@
         </select></div>
       <div class="row"><span>سرعة الالتقاط</span>
         <select id="speed">
-          <option value="600">سريع جداً</option>
-          <option value="1200" selected>سريع</option>
-          <option value="2000">متوسط</option>
-          <option value="3500">بطيء</option>
+          <option value="250" selected>سريع جداً</option>
+          <option value="500">سريع</option>
+          <option value="1000">متوسط</option>
+          <option value="2000">بطيء</option>
         </select></div>
-      <div class="row"><span>ألوان النص</span>
-        <select id="inv">
+      <div class="row"><span>نوع النص</span>
+        <select id="tmode">
+          <option value="game" selected>ترجمة الألعاب (كلام أبيض أو أصفر)</option>
           <option value="auto">تلقائي</option>
-          <option value="on">نص فاتح على خلفية غامقة</option>
-          <option value="off">نص غامق على خلفية فاتحة</option>
+          <option value="light">نص فاتح على خلفية غامقة</option>
+          <option value="dark">نص غامق على خلفية فاتحة</option>
         </select></div>
       <div class="row"><span>أكبر حجم للخط</span><input type="range" id="fmax" min="40" max="200" value="140"></div>
       <div class="row"><span>نطق الترجمة بالصوت</span><input type="checkbox" id="speak"></div>
@@ -147,7 +148,7 @@ const wctx = work.getContext('2d', { willReadFrequently: true });
 let stream = null, track = null, worker = null, workerLang = null;
 let running = false, timer = null, wakeLock = null;
 let lastText = '';
-let shownThumb = null, candidate = null, stableCount = 0, skipCount = 0;
+let candidate = null, stableCount = 0;
 const cache = new Map();
 
 /* التقريب */
@@ -164,10 +165,10 @@ const DEFAULT_BOX = { x:.06, y:.55, w:.88, h:.3 };
 let region = load('gt_box', DEFAULT_BOX);
 
 /* ===== الإعدادات المحفوظة ===== */
-['lang','speed','inv','fmax','speak','showOrig'].forEach(id => {
-  const el = $(id), v = load('gt_'+id, null);
+['lang','speed','tmode','fmax','speak','showOrig'].forEach(id => {
+  const el = $(id), v = load('gt2_'+id, null);
   if (v !== null){ if (el.type === 'checkbox') el.checked = v; else el.value = v; }
-  el.addEventListener('change', () => { save('gt_'+id, el.type === 'checkbox' ? el.checked : el.value); applySettings(); });
+  el.addEventListener('change', () => { save('gt2_'+id, el.type === 'checkbox' ? el.checked : el.value); applySettings(); });
   el.addEventListener('input', applySettings);
 });
 function applySettings(){
@@ -387,47 +388,153 @@ $('clearBtn').onclick = () => {
   fitText();
 };
 
-/* ===== محرك قراءة النصوص ===== */
+/* ===== محرك قراءة النصوص (عاملين مع بعض عشان السرعة) ===== */
+let scheduler = null, schedLang = null, schedLoading = null;
+const nWorkers = (navigator.hardwareConcurrency || 4) >= 4 ? 2 : 1;
 async function ensureWorker(){
   const lang = $('lang').value;
-  if (worker && workerLang === lang) return;
-  if (worker){ try{ await worker.terminate(); }catch(e){} worker = null; }
-  setStatus('جاري تحميل محرك قراءة النصوص… (أول مرة ياخذ شوي)');
-  worker = await Tesseract.createWorker(lang, 1, {
-    logger: m => { if (m.progress != null && /load|init/i.test(m.status || '')) setStatus('جاري التحميل ' + toAr(Math.round(m.progress * 100)) + '٪'); }
-  });
-  await worker.setParameters({ tessedit_pageseg_mode: '6', preserve_interword_spaces: '1' });
-  workerLang = lang;
+  if (scheduler && schedLang === lang) return;
+  if (schedLoading) return schedLoading;
+  schedLoading = (async () => {
+    if (scheduler){ try{ await scheduler.terminate(); }catch(e){} scheduler = null; }
+    setStatus('جاري تحميل محرك قراءة النصوص… (أول مرة ياخذ شوي)');
+    const s = Tesseract.createScheduler();
+    for (let i = 0; i < nWorkers; i++){
+      const w = await Tesseract.createWorker(lang, 1, {
+        logger: m => { if (m.progress != null && /load|init/i.test(m.status || '')) setStatus('جاري التحميل ' + toAr(Math.round(m.progress * 100)) + '٪'); }
+      });
+      await w.setParameters({ tessedit_pageseg_mode: '6', preserve_interword_spaces: '1' });
+      s.addWorker(w);
+    }
+    scheduler = s; schedLang = lang;
+  })();
+  try{ await schedLoading; } finally { schedLoading = null; }
 }
 
-/* ===== قص الجزء اللي داخل المربع وتجهيزه ===== */
-function capture(){
+/* ===== قص المربع، والبحث عن مكان الكلام داخله، وتكبيره ===== */
+const raw = document.createElement('canvas'), rctx = raw.getContext('2d', { willReadFrequently: true });
+const ana = document.createElement('canvas'), actx = ana.getContext('2d', { willReadFrequently: true });
+
+function grabRegion(){
   const vw = video.videoWidth, vh = video.videoHeight;
-  if (!vw || !vh) return null;
+  if (!vw || !vh) return false;
   const r = vidRect(), b = boxPx();
   let sx = (b.x - r.x) / r.s, sy = (b.y - r.y) / r.s, sw = b.w / r.s, sh = b.h / r.s;
   sx = Math.max(0, sx); sy = Math.max(0, sy);
   sw = Math.min(vw - sx, sw); sh = Math.min(vh - sy, sh);
-  if (sw < 8 || sh < 8) return null;
-  const scale = Math.max(1, Math.min(3, 1400 / sw));
-  work.width = Math.round(sw * scale); work.height = Math.round(sh * scale);
-  wctx.imageSmoothingQuality = 'high';
-  wctx.drawImage(video, sx, sy, sw, sh, 0, 0, work.width, work.height);
-  const img = wctx.getImageData(0, 0, work.width, work.height), d = img.data, n = d.length / 4;
-  const g = new Uint8ClampedArray(n), hist = new Uint32Array(256); let sum = 0;
-  for (let i = 0, j = 0; i < n; i++, j += 4){ const v = (d[j]*.299 + d[j+1]*.587 + d[j+2]*.114) | 0; g[i] = v; hist[v]++; sum += v; }
-  let lo = 0, hi = 255, acc = 0;
-  for (let i = 0; i < 256; i++){ acc += hist[i]; if (acc > n * .02){ lo = i; break; } }
-  acc = 0; for (let i = 255; i >= 0; i--){ acc += hist[i]; if (acc > n * .02){ hi = i; break; } }
-  const range = Math.max(30, hi - lo), mode = $('inv').value;
-  const invert = mode === 'on' || (mode === 'auto' && sum / n < 115);
-  for (let i = 0, j = 0; i < n; i++, j += 4){
-    let v = (g[i] - lo) * 255 / range; v = v < 0 ? 0 : v > 255 ? 255 : v;
-    if (invert) v = 255 - v;
-    d[j] = d[j+1] = d[j+2] = v; d[j+3] = 255;
+  if (sw < 8 || sh < 8) return false;
+  raw.width = Math.round(sw); raw.height = Math.round(sh);
+  rctx.drawImage(video, sx, sy, sw, sh, 0, 0, raw.width, raw.height);
+  return true;
+}
+
+function chan(d, j, mode){
+  // في وضع الألعاب ناخذ أقل قيمة بين الأحمر والأخضر: الأبيض والأصفر يطلعون عاليين
+  return mode === 'game' ? Math.min(d[j], d[j+1]) : (d[j]*.299 + d[j+1]*.587 + d[j+2]*.114);
+}
+
+function findText(mode){
+  const AW = Math.min(420, raw.width), as = AW / raw.width, AH = Math.max(8, Math.round(raw.height * as));
+  ana.width = AW; ana.height = AH;
+  actx.drawImage(raw, 0, 0, AW, AH);
+  const d = actx.getImageData(0, 0, AW, AH).data;
+  const g = new Uint8Array(AW * AH);
+  for (let i = 0, j = 0; i < g.length; i++, j += 4) g[i] = chan(d, j, mode);
+  const edge = new Uint8Array(AW * AH), rows = new Float32Array(AH);
+  const thr = mode === 'game' ? 55 : 35;
+  for (let y = 0; y < AH; y++){
+    for (let x = 0; x < AW - 1; x++){
+      const i = y * AW + x, a = g[i], c = g[i + 1];
+      const e = Math.abs(a - c) > thr && (mode !== 'game' || Math.max(a, c) > 165);
+      if (e){ edge[i] = 1; rows[y]++; }
+    }
   }
-  wctx.putImageData(img, 0, 0);
-  return work;
+  const rowThr = Math.max(3, AW * .025);
+  const bands = []; let st = -1, en = -1, gap = 0;
+  for (let y = 0; y < AH; y++){
+    if (rows[y] >= rowThr){ if (st < 0) st = y; en = y; gap = 0; }
+    else if (st >= 0 && ++gap > 2){ bands.push([st, en]); st = -1; }
+  }
+  if (st >= 0) bands.push([st, en]);
+  let good = bands.filter(([a, b]) => b - a + 1 >= 3 && b - a + 1 <= AH * .7)
+    .map(([a, b]) => { let m = 0; for (let y = a; y <= b; y++) m += rows[y]; return { a, b, m }; });
+  if (!good.length) return null;
+  const maxM = Math.max(...good.map(x => x.m));
+  good = good.filter(x => x.m >= maxM * .2);
+  const y0 = Math.min(...good.map(x => x.a)), y1 = Math.max(...good.map(x => x.b));
+  if ((y1 - y0) > AH * .85 && good.length > 4) return null; // المربع كله زحمة — نقرأه كامل
+  const hs = good.map(x => x.b - x.a + 1).sort((p, q) => p - q);
+  const lineH = hs[hs.length >> 1];
+  const cols = new Float32Array(AW);
+  good.forEach(({ a, b }) => { for (let y = a; y <= b; y++) for (let x = 0; x < AW; x++) cols[x] += edge[y * AW + x]; });
+  let x0 = 0, x1 = AW - 1;
+  while (x0 < AW && cols[x0] < 1) x0++;
+  while (x1 > x0 && cols[x1] < 1) x1--;
+  if (x1 <= x0) return null;
+  const pad = lineH * .9;
+  const X0 = Math.max(0, x0 - pad), Y0 = Math.max(0, y0 - pad);
+  const X1 = Math.min(AW, x1 + pad), Y1 = Math.min(AH, y1 + 1 + pad);
+  return { x:X0 / as, y:Y0 / as, w:(X1 - X0) / as, h:(Y1 - Y0) / as, lineH:lineH / as };
+}
+
+function otsu(hist, n){
+  let sum = 0; for (let i = 0; i < 256; i++) sum += i * hist[i];
+  let sB = 0, wB = 0, best = 0, t = 127;
+  for (let i = 0; i < 256; i++){
+    wB += hist[i]; if (!wB) continue;
+    const wF = n - wB; if (!wF) break;
+    sB += i * hist[i];
+    const mB = sB / wB, mF = (sum - sB) / wF, v = wB * wF * (mB - mF) * (mB - mF);
+    if (v > best){ best = v; t = i; }
+  }
+  return t;
+}
+
+function prepareFrame(){
+  if (!grabRegion()) return null;
+  const mode = $('tmode').value;
+  let box = findText(mode);
+  let scale;
+  if (box){
+    scale = Math.max(1, Math.min(6, 46 / Math.max(4, box.lineH)));
+  } else {
+    box = { x:0, y:0, w:raw.width, h:raw.height };
+    scale = Math.max(1, Math.min(3, 1800 / raw.width));
+  }
+  let ow = box.w * scale, oh = box.h * scale;
+  if (ow > 2600){ scale *= 2600 / ow; }
+  ow = box.w * scale; oh = box.h * scale;
+  if (ow * oh > 3.2e6){ scale *= Math.sqrt(3.2e6 / (ow * oh)); }
+  const out = document.createElement('canvas');
+  out.width = Math.max(16, Math.round(box.w * scale)); out.height = Math.max(16, Math.round(box.h * scale));
+  const o = out.getContext('2d', { willReadFrequently: true });
+  o.imageSmoothingQuality = 'high';
+  o.drawImage(raw, box.x, box.y, box.w, box.h, 0, 0, out.width, out.height);
+  const img = o.getImageData(0, 0, out.width, out.height), d = img.data, n = d.length / 4;
+  const g = new Uint8Array(n), hist = new Uint32Array(256);
+  for (let i = 0, j = 0; i < n; i++, j += 4){ const v = chan(d, j, mode) | 0; g[i] = v; hist[v]++; }
+  if (mode === 'game'){
+    const T = Math.max(160, otsu(hist, n));
+    for (let i = 0, j = 0; i < n; i++, j += 4){ const v = g[i] > T ? 0 : 255; d[j] = d[j+1] = d[j+2] = v; d[j+3] = 255; }
+  } else {
+    let lo = 0, hi = 255, acc = 0;
+    for (let i = 0; i < 256; i++){ acc += hist[i]; if (acc > n * .02){ lo = i; break; } }
+    acc = 0; for (let i = 255; i >= 0; i--){ acc += hist[i]; if (acc > n * .02){ hi = i; break; } }
+    let invert = mode === 'light';
+    if (mode === 'auto'){
+      const T = otsu(hist, n); let bright = 0;
+      for (let i = T + 1; i < 256; i++) bright += hist[i];
+      invert = bright / n < .45; // الكلام هو اللون الأقل
+    }
+    const range = Math.max(30, hi - lo);
+    for (let i = 0, j = 0; i < n; i++, j += 4){
+      let v = (g[i] - lo) * 255 / range; v = v < 0 ? 0 : v > 255 ? 255 : v;
+      if (invert) v = 255 - v;
+      d[j] = d[j+1] = d[j+2] = v; d[j+3] = 255;
+    }
+  }
+  o.putImageData(img, 0, 0);
+  return out;
 }
 
 /* ===== تنظيف ومقارنة النص ===== */
@@ -480,7 +587,7 @@ function wordSim(a, b){
   return 2 * inter / (A.size + B.size);
 }
 function sameText(a, b){ return Math.max(wordSim(a, b), similarity(a, b)); }
-function resetStable(){ lastText = ''; shownThumb = null; candidate = null; stableCount = 0; }
+function resetStable(){ lastText = ''; candidate = null; stableCount = 0; }
 
 /* ===== الترجمة (مجانية) ===== */
 const srcMap = { eng:'en', jpn:'ja', chi_sim:'zh-CN', kor:'ko', fra:'fr', spa:'es', deu:'de', rus:'ru', por:'pt', ita:'it', tur:'tr' };
@@ -578,56 +685,76 @@ function speak(t){
   }catch(e){}
 }
 
-/* ===== حلقة الترجمة ===== */
+/* ===== حلقة الترجمة السريعة ===== */
+let seq = 0, lastDone = 0, inFlight = 0, transSeq = 0, emptyCount = 0;
+function fixOcr(t){
+  // تصليح أغلاط القراءة المشهورة داخل الكلمات الإنجليزية
+  return t.split(' ').map(w => {
+    const letters = (w.match(/[A-Za-z]/g) || []).length;
+    if (letters >= 2 && letters >= w.replace(/[^A-Za-z0-9]/g, '').length - 2){
+      const near = (s, i, re) => re.test(s[i - 1] || '') || re.test(s[i + 1] || '');
+      w = w.replace(/0/g, (m, i, s) => near(s, i, /[A-Za-z]/) ? 'o' : m)
+           .replace(/1/g, (m, i, s) => near(s, i, /[a-z]/) ? 'l' : m)
+           .replace(/5/g, (m, i, s) => (/[a-z]/.test(s[i - 1] || '') && /[a-z]/.test(s[i + 1] || '')) ? 's' : m);
+    }
+    if (w === '|' || w === 'l' ) return 'I';
+    return w;
+  }).join(' ');
+}
+async function handle(data){
+  const lines = (data.lines || []).filter(l => clean(l.text));
+  const good = lines.filter(l => l.confidence > 30);
+  let text = good.length ? good.map(l => l.text).join(' ') : (data.text || '');
+  text = fixOcr(clean(text));
+  const conf = good.length ? good.reduce((a, l) => a + l.confidence, 0) / good.length : (data.confidence || 0);
+  if (!meaningful(text)){
+    candidate = null; stableCount = 0;
+    if (++emptyCount > 3 && running) setStatus('🟡 ما لقيت نص واضح — قرّب الكاميرا أو حط المربع على الكلام');
+    return;
+  }
+  emptyCount = 0;
+  if (lastText && sameText(text, lastText) > .6 && text.length < lastText.length * 1.3){
+    candidate = null; stableCount = 0;
+    if (running) setStatus('🟢 الترجمة شغالة');
+    return;
+  }
+  // القراءة الضعيفة لازم تتكرر مرتين، والواضحة تترجم على طول
+  if (conf < 50){
+    if (candidate && sameText(text, candidate) > .5){ stableCount++; if (text.length > candidate.length) candidate = text; }
+    else { candidate = text; stableCount = 1; }
+    if (stableCount < 2) return;
+    text = candidate;
+  }
+  candidate = null; stableCount = 0;
+  lastText = text;
+  const my = ++transSeq;
+  setStatus('🔄 جاري الترجمة…');
+  try{
+    const ar = await translate(text);
+    if (ar && running && my === transSeq){
+      if (ar.trim() !== $('current').textContent.trim()) show(ar, text);
+      setStatus('🟢 الترجمة شغالة');
+    }
+  }catch(e){ lastText = ''; setStatus('⚠️ ما قدرت أترجم، تأكد من الإنترنت'); }
+}
+async function launch(){
+  let frame;
+  try{ frame = prepareFrame(); }catch(e){ return; }
+  if (!frame) return;
+  const my = ++seq; inFlight++;
+  try{
+    const { data } = await scheduler.addJob('recognize', frame);
+    if (running && my > lastDone){ lastDone = my; await handle(data); }
+  }catch(e){
+    if (running) setStatus('⚠️ صارت مشكلة… أحاول مرة ثانية');
+  }finally{ inFlight--; }
+}
 async function tick(){
   if (!running) return;
   try{
     await ensureWorker();
-    if (!running) return;
-    const c = capture();
-    if (c){
-      const thumb = makeThumb(c);
-      skipCount++;
-      // إذا الصورة داخل المربع ما تغيرت عن آخر ترجمة، نخلي الترجمة مثل ما هي (ونتأكد كل شوي)
-      if (shownThumb && thumbDiff(thumb, shownThumb) < 6 && skipCount < 5){
-        if (running) setStatus('🟢 الترجمة شغالة — أي نص يطلع بالمربع يتترجم');
-      } else {
-        skipCount = 0;
-        setStatus('👀 أقرأ النص…');
-        const { data } = await worker.recognize(c);
-        const lines = (data.lines || []).filter(l => clean(l.text));
-        let good = lines.filter(l => l.confidence > 30);
-        let text = good.length ? good.map(l => l.text).join(' ') : (data.text || '');
-        text = clean(text);
-        const conf = good.length ? good.reduce((a, l) => a + l.confidence, 0) / good.length : (data.confidence || 0);
-        if (!meaningful(text)){
-          candidate = null; stableCount = 0;
-          if (running) setStatus('🟡 ما لقيت نص واضح داخل المربع — قرّب الكاميرا أو كبّر المربع على الكلام');
-        } else if (lastText && sameText(text, lastText) > .6 && text.length < lastText.length * 1.3){
-          // نفس الكلام بس القراءة اختلفت شوي — ما نغير شي
-          shownThumb = thumb; candidate = null; stableCount = 0;
-          if (running) setStatus('🟢 الترجمة شغالة — أي نص يطلع بالمربع يتترجم');
-        } else {
-          // إذا القراءة واضحة نترجم على طول، وإذا مو واضحة ننتظر قراءة ثانية تأكدها
-          if (candidate && sameText(text, candidate) > .5){ stableCount++; if (text.length > candidate.length) candidate = text; }
-          else { candidate = text; stableCount = 1; }
-          if (stableCount >= 2 || conf >= 65 || !lastText){
-            const finalText = candidate;
-            candidate = null; stableCount = 0;
-            setStatus('🔄 جاري الترجمة…');
-            const ar = await translate(finalText);
-            if (ar && running){
-              lastText = finalText; shownThumb = thumb;
-              if (ar.trim() !== $('current').textContent.trim()) show(ar, finalText);
-            }
-          }
-          if (running) setStatus('🟢 الترجمة شغالة — أي نص يطلع بالمربع يتترجم');
-        }
-      }
-    }
-  }catch(e){
-    setStatus('⚠️ صارت مشكلة، تأكد من الإنترنت… أحاول مرة ثانية');
-  }
+    if (running && scheduler && inFlight < nWorkers) launch();
+  }catch(e){ setStatus('⚠️ ما تحمل محرك القراءة، تأكد من الإنترنت'); }
   if (running) timer = setTimeout(tick, +$('speed').value);
 }
 
@@ -647,7 +774,7 @@ $('startBtn').onclick = async () => {
   }
   if (!(await startCamera())) return;
   if (typeof Tesseract === 'undefined'){ setStatus('⚠️ ما تحمل محرك القراءة، تأكد من الإنترنت وحدّث الصفحة'); return; }
-  running = true; resetStable();
+  running = true; resetStable(); seq = 0; lastDone = 0; transSeq++; emptyCount = 0;
   $('startBtn').classList.add('on'); $('startBtn').textContent = '⏹ إيقاف الترجمة';
   keepAwake(true); draw(); tick();
 };
